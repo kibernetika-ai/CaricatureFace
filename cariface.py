@@ -76,9 +76,10 @@ class MyNet(nn.Module):
         return x
 
 class CariFace():
-    def init_numbers(self, landmark_num=68, vertex_num=6144, device_num=0):
+    def init_numbers(self, landmark_num=68, vertex_num=6144, cpu=False, device_num=0):
         self.landmark_num = landmark_num
         self.vertex_num = vertex_num
+        self.cpu = cpu
         self.device_num = device_num
 
     def init_data(self, data_path="data/"):
@@ -95,15 +96,16 @@ class CariFace():
         one_ring_lbweights_path = data_path + "one_ring_lbweights.npy" # the Laplacian weights of each connection
         landmark_index_path = data_path + "best_68.txt" # the ids of 68 3D landmarks
         # load pca_pri and logR_S_mean
-        self.pca_pri = torch.from_numpy(np.load(pca_pri_path)).float().to(self.device_num)
-        self.logR_S_mean = torch.from_numpy(np.load(logR_S_mean_path)).float().to(self.device_num)
+        self.to_device(torch.from_numpy(np.load(pca_pri_path)).float())
+        self.pca_pri = self.to_device(torch.from_numpy(np.load(pca_pri_path)).float())
+        self.logR_S_mean = self.to_device(torch.from_numpy(np.load(logR_S_mean_path)).float())
         # A_pinv and warehouse_0's vertices
-        self.A_pinv = torch.from_numpy(np.load(A_pinv_path)).to(self.device_num).float()
-        self.P_ = torch.from_numpy(np.load(warehouse_vertex_path)).to(self.device_num).float()
+        self.A_pinv = self.to_device(torch.from_numpy(np.load(A_pinv_path))).float()
+        self.P_ = self.to_device(torch.from_numpy(np.load(warehouse_vertex_path))).float()
         # connects and landmarks' indices
-        self.one_ring_center_ids = torch.from_numpy(np.loadtxt(one_ring_center_ids_path)).to(self.device_num).long()
-        self.one_ring_ids = torch.from_numpy(np.loadtxt(one_ring_ids_path)).to(self.device_num).long()
-        self.one_ring_lbweights = torch.from_numpy(np.load(one_ring_lbweights_path)).to(self.device_num).float()
+        self.one_ring_center_ids = self.to_device(torch.from_numpy(np.loadtxt(one_ring_center_ids_path))).long()
+        self.one_ring_ids = self.to_device(torch.from_numpy(np.loadtxt(one_ring_ids_path))).long()
+        self.one_ring_lbweights = self.to_device(torch.from_numpy(np.load(one_ring_lbweights_path))).float()
         file = open(connect_path, 'r')
         lines = file.readlines()
         file.close()
@@ -123,9 +125,15 @@ class CariFace():
                 conn_i[:,conn_k] = torch.LongTensor([i, conn_k])
                 conn_k += 1
         conn_v = torch.ones(connects_num).long()
-        self.connect_ = torch.sparse.FloatTensor(conn_i, conn_v, torch.Size([self.vertex_num,connects_num])).to(self.device_num).float()
-        self.landmark_index = torch.from_numpy(np.loadtxt(landmark_index_path)).long().to(self.device_num)
-    
+        self.connect_ = self.to_device(torch.sparse.FloatTensor(conn_i, conn_v, torch.Size([self.vertex_num,connects_num]))).float()
+        self.landmark_index = self.to_device(torch.from_numpy(np.loadtxt(landmark_index_path)).long())
+
+    def to_device(self, a: torch.Tensor):
+        if self.cpu:
+            return a.cpu()
+        else:
+            return a.to(self.device_num)
+
     def load_train_data(self, image_path, landmark_path, vertex_path, size=32, workers=6):
         trainset = TrainSet(image_path, landmark_path, vertex_path, self.landmark_num, self.vertex_num)
         self.train_loader = torch.utils.data.DataLoader(trainset, batch_size=size, shuffle=True, num_workers=workers)
@@ -139,11 +147,15 @@ class CariFace():
         self.model1 = torchvision.models.resnet34(pretrained=True)
         fc_features = self.model1.fc.in_features
         self.model1.fc = nn.Linear(in_features=fc_features, out_features=100)
-        self.model1 = self.model1.to(self.device_num)
-        self.model2 = MyNet(self.vertex_num, self.pca_pri).to(self.device_num)
+        self.model1 = self.to_device(self.model1)
+        self.model2 = self.to_device(MyNet(self.vertex_num, self.pca_pri))
         if use_premodel == True:
-            ck1 = torch.load(model1_path)
-            ck2 = torch.load(model2_path)
+            if self.cpu:
+                map_location = torch.device('cpu')
+            else:
+                map_location = None
+            ck1 = torch.load(model1_path, map_location=map_location)
+            ck2 = torch.load(model2_path, map_location=map_location)
             # ck1 = torch.load(model1_path, map_location={'cuda:0':'cuda:3'})
             # ck2 = torch.load(model2_path, map_location={'cuda:0':'cuda:3'})
             self.model1.load_state_dict(ck1['net'])
@@ -155,7 +167,7 @@ class CariFace():
             {'params':self.model2.fc2.parameters(), 'lr':mynet1_lr}])
         self.optimizer3 = torch.optim.Adam(self.model2.fc3.parameters(), lr = mynet2_lr)
         # loss function
-        self.loss_fn = nn.MSELoss().to(self.device_num)
+        self.loss_fn = self.to_device(nn.MSELoss())
 
     def train(self, epoch, lambda_land=1, lambda_srt=1e-1):
         start = time.time()
@@ -168,7 +180,7 @@ class CariFace():
         loss_3 = 0.0
         with torch.autograd.set_detect_anomaly(True):
             for batch_idx, (img, landmark, vertex) in enumerate(self.train_loader):
-                img, landmark, vertex = img.to(self.device_num).float(), landmark.to(self.device_num).float(), vertex.to(self.device_num).float()
+                img, landmark, vertex = self.to_device(img).float(), self.to_device(landmark).float(), self.to_device(vertex).float()
                 output = self.model1(img)
                 alpha = output[:,0:94] # alpha parameter
                 scale = output[:, 94] # scale parameter
@@ -271,7 +283,7 @@ class CariFace():
         total_num = 0
         with torch.no_grad():
             for img, landmark, lrecord, vrecord in self.test_loader:
-                img, landmark = img.to(self.device_num).float(), landmark.to(self.device_num).float()
+                img, landmark = self.to_device(img).float(), self.to_device(landmark).float()
                 output = self.model1(img)
                 alpha = output[:, 0:94]
                 scale = output[:, 94]

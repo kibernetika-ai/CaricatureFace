@@ -9,6 +9,7 @@ class TrainOptions():
         self.initialized = True
         parser.add_argument('--landmark_num', type=int, default=68, help='landmark number')
         parser.add_argument('--vertex_num', type=int, default=6144, help='vertex number of 3D mesh')
+        parser.add_argument('--cpu', action='store_true', help='use cpu')
         parser.add_argument('--device_num', type=int, default=0, help='gpu id')
         parser.add_argument('--data_path', type=str, default="data/", help='path of related data')
         if_train_parser = parser.add_mutually_exclusive_group(required=False)

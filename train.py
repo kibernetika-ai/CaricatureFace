@@ -5,7 +5,7 @@ if __name__ == '__main__':
     opt = TrainOptions().parse()
 
     model = cariface.CariFace()
-    model.init_numbers(opt.landmark_num, opt.vertex_num, opt.device_num)
+    model.init_numbers(opt.landmark_num, opt.vertex_num, opt.cpu, opt.device_num)
     model.init_data(opt.data_path)
     if opt.if_train == True:
         model.load_train_data(opt.train_image_path, opt.train_landmark_path, opt.train_vertex_path,
