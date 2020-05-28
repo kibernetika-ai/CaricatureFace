@@ -1,1 +1,1 @@
-This folder is used to contain some necessary data for our method.
+This folder contains some related data for our method.

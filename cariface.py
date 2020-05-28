@@ -181,67 +181,8 @@ class CariFace():
         with torch.autograd.set_detect_anomaly(True):
             for batch_idx, (img, landmark, vertex) in enumerate(self.train_loader):
                 img, landmark, vertex = self.to_device(img).float(), self.to_device(landmark).float(), self.to_device(vertex).float()
-                output = self.model1(img)
-                alpha = output[:,0:94] # alpha parameter
-                scale = output[:, 94] # scale parameter
-                euler_angle = output[:, 95:98] # euler_angle parameter
-                trans = output[:, 98:100] # trans parameter
-                
-                # solve logR_S and T
-                delta = self.model2(alpha)
-                logR_S = delta + self.logR_S_mean
-                logR_S = logR_S.reshape(-1, 9)
-                rparas = logR_S[:,0:3]
-                sparas = logR_S[:,3:]
-                angles = rparas.norm(2,1)
-                indices = angles.nonzero()
-                tRs = torch.zeros_like(logR_S)
-                tRs[:,0::4] = 1.0
-                if indices.numel() > 0 and indices.numel() < angles.numel():
-                    indices = indices[:,0]
-                    crparas = rparas[indices]/angles[indices].reshape(-1,1)
-                    temp = (1-torch.cos(angles[indices]).reshape(-1,1))
-                    tempS = torch.sin(angles[indices]).reshape(-1,1)
-                    tRs[indices, 0::4] = torch.cos(angles[indices]).reshape(-1,1) + temp * crparas * crparas
-                    tRs[indices, 1] = temp.view(-1) * crparas[:,0] * crparas[:,1] - tempS.view(-1) * crparas[:,2]
-                    tRs[indices, 2] = temp.view(-1) * crparas[:,0] * crparas[:,2] + tempS.view(-1) * crparas[:,1]
-                    tRs[indices, 3] = temp.view(-1) * crparas[:,0] * crparas[:,1] + tempS.view(-1) * crparas[:,2]
-                    tRs[indices, 5] = temp.view(-1) * crparas[:,1] * crparas[:,2] - tempS.view(-1) * crparas[:,0]
-                    tRs[indices, 6] = temp.view(-1) * crparas[:,0] * crparas[:,2] - tempS.view(-1) * crparas[:,1]
-                    tRs[indices, 7] = temp.view(-1) * crparas[:,1] * crparas[:,2] + tempS.view(-1) * crparas[:,0]
-                elif indices.numel()==angles.numel():
-                    rparas = rparas/angles.reshape(-1,1)
-                    temp = (1-torch.cos(angles).reshape(-1,1))
-                    tempS = torch.sin(angles).reshape(-1,1)
-                    tRs[:, 0::4] = torch.cos(angles).reshape(-1,1) + temp * rparas * rparas
-                    tRs[:, 1] = temp.view(-1) * rparas[:,0] * rparas[:,1] - tempS.view(-1) * rparas[:,2]
-                    tRs[:, 2] = temp.view(-1) * rparas[:,0] * rparas[:,2] + tempS.view(-1) * rparas[:,1]
-                    tRs[:, 3] = temp.view(-1) * rparas[:,0] * rparas[:,1] + tempS.view(-1) * rparas[:,2]
-                    tRs[:, 5] = temp.view(-1) * rparas[:,1] * rparas[:,2] - tempS.view(-1) * rparas[:,0]
-                    tRs[:, 6] = temp.view(-1) * rparas[:,0] * rparas[:,2] - tempS.view(-1) * rparas[:,1]
-                    tRs[:, 7] = temp.view(-1) * rparas[:,1] * rparas[:,2] + tempS.view(-1) * rparas[:,0]
-                tSs = torch.zeros_like(logR_S)
-                tSs[:, 0:3] = sparas[:, 0:3]
-                tSs[:, 3] = sparas[:, 1]
-                tSs[:, 4:6] = sparas[:, 3:5]
-                tSs[:, 6] = sparas[:, 2]
-                tSs[:, 7] = sparas[:, 4]
-                tSs[:, 8] = sparas[:, 5]
-                Ts = torch.bmm(tRs.reshape(-1,3,3), tSs.reshape(-1,3,3)).reshape(-1, self.vertex_num, 9)
-                
-                # solve points
-                Tijs = Ts.index_select(1, self.one_ring_center_ids) + Ts.index_select(1, self.one_ring_ids)
-                pijs = self.P_.index_select(0, self.one_ring_center_ids) - self.P_.index_select(0, self.one_ring_ids)
-                temp = torch.zeros((Tijs.size()[0],3,Tijs.size()[1]), device=Ts.device)
-                temp[:,0,:] = torch.sum(Tijs[:,:,0:3]*(pijs*self.one_ring_lbweights.reshape(-1,1)), 2)
-                temp[:,1,:] = torch.sum(Tijs[:,:,3:6]*(pijs*self.one_ring_lbweights.reshape(-1,1)), 2)
-                temp[:,2,:] = torch.sum(Tijs[:,:,6:9]*(pijs*self.one_ring_lbweights.reshape(-1,1)), 2)
-                temp = temp.reshape(-1, self.one_ring_ids.numel()).t().clone()
-                RHS = torch.spmm(self.connect_, temp)
-                points = (torch.matmul(self.A_pinv, RHS)).t()
-                points_mean = torch.mean(points, 1).reshape(points.shape[0],-1)
-                points -= points_mean.expand_as(points)
-                points = points.reshape(-1,3,self.vertex_num)
+                points, euler_angle, scale, trans = self.solve_points(img)
+
                 loss_geo = 10 * self.loss_fn(points, vertex)
 
                 # solve landmarks
@@ -284,67 +225,7 @@ class CariFace():
         with torch.no_grad():
             for img, landmark, lrecord, vrecord in self.test_loader:
                 img, landmark = self.to_device(img).float(), self.to_device(landmark).float()
-                output = self.model1(img)
-                alpha = output[:, 0:94]
-                scale = output[:, 94]
-                euler_angle = output[:, 95:98]
-                trans = output[:, 98:100]
-
-                # solve logR_S and T
-                delta = self.model2(alpha)
-                logR_S = delta + self.logR_S_mean
-                logR_S = logR_S.reshape(-1,9)
-                rparas = logR_S[:,0:3]
-                sparas = logR_S[:,3:]
-                angles = rparas.norm(2,1)
-                indices = angles.nonzero()
-                tRs = torch.zeros_like(logR_S)
-                tRs[:,0::4] = 1.0
-                if indices.numel() > 0 and indices.numel() < angles.numel():
-                    indices = indices[:,0]
-                    crparas = rparas[indices]/angles[indices].reshape(-1,1)
-                    temp = (1-torch.cos(angles[indices]).reshape(-1,1))
-                    tempS = torch.sin(angles[indices]).reshape(-1,1)
-                    tRs[indices, 0::4] = torch.cos(angles[indices]).reshape(-1,1) + temp * crparas * crparas
-                    tRs[indices, 1] = temp.view(-1) * crparas[:,0] * crparas[:,1] - tempS.view(-1) * crparas[:,2]
-                    tRs[indices, 2] = temp.view(-1) * crparas[:,0] * crparas[:,2] + tempS.view(-1) * crparas[:,1]
-                    tRs[indices, 3] = temp.view(-1) * crparas[:,0] * crparas[:,1] + tempS.view(-1) * crparas[:,2]
-                    tRs[indices, 5] = temp.view(-1) * crparas[:,1] * crparas[:,2] - tempS.view(-1) * crparas[:,0]
-                    tRs[indices, 6] = temp.view(-1) * crparas[:,0] * crparas[:,2] - tempS.view(-1) * crparas[:,1]
-                    tRs[indices, 7] = temp.view(-1) * crparas[:,1] * crparas[:,2] + tempS.view(-1) * crparas[:,0]
-                elif indices.numel()==angles.numel():
-                    rparas = rparas/angles.reshape(-1,1)
-                    temp = (1 - torch.cos(angles).reshape(-1,1))
-                    tempS = torch.sin(angles).reshape(-1,1)
-                    tRs[:, 0::4] = torch.cos(angles).reshape(-1,1) + temp * rparas * rparas
-                    tRs[:, 1] = temp.view(-1) * rparas[:,0] * rparas[:,1] - tempS.view(-1) * rparas[:,2]
-                    tRs[:, 2] = temp.view(-1) * rparas[:,0] * rparas[:,2] + tempS.view(-1) * rparas[:,1]
-                    tRs[:, 3] = temp.view(-1) * rparas[:,0] * rparas[:,1] + tempS.view(-1) * rparas[:,2]
-                    tRs[:, 5] = temp.view(-1) * rparas[:,1] * rparas[:,2] - tempS.view(-1) * rparas[:,0]
-                    tRs[:, 6] = temp.view(-1) * rparas[:,0] * rparas[:,2] - tempS.view(-1) * rparas[:,1]
-                    tRs[:, 7] = temp.view(-1) * rparas[:,1] * rparas[:,2] + tempS.view(-1) * rparas[:,0]
-                tSs = torch.zeros_like(logR_S)
-                tSs[:, 0:3] = sparas[:, 0:3]
-                tSs[:, 3] = sparas[:, 1]
-                tSs[:, 4:6] = sparas[:, 3:5]
-                tSs[:, 6] = sparas[:, 2]
-                tSs[:, 7] = sparas[:, 4]
-                tSs[:, 8] = sparas[:, 5]
-                Ts = torch.bmm(tRs.reshape(-1,3,3), tSs.reshape(-1,3,3)).reshape(-1, self.vertex_num, 9)
-
-                # solve points
-                Tijs = Ts.index_select(1, self.one_ring_center_ids) + Ts.index_select(1, self.one_ring_ids)
-                pijs = self.P_.index_select(0, self.one_ring_center_ids) - self.P_.index_select(0, self.one_ring_ids)
-                temp = torch.zeros((Tijs.size()[0], 3, Tijs.size()[1]), device=Ts.device)
-                temp[:,0,:] = torch.sum(Tijs[:,:,0:3]*(pijs*self.one_ring_lbweights.reshape(-1,1)), 2)
-                temp[:,1,:] = torch.sum(Tijs[:,:,3:6]*(pijs*self.one_ring_lbweights.reshape(-1,1)), 2)
-                temp[:,2,:] = torch.sum(Tijs[:,:,6:9]*(pijs*self.one_ring_lbweights.reshape(-1,1)), 2)
-                temp = temp.reshape(-1, self.one_ring_ids.numel()).t().clone()
-                RHS = torch.spmm(self.connect_, temp)
-                points = (torch.matmul(self.A_pinv, RHS)).t()
-                points_mean = torch.mean(points, 1).reshape(points.shape[0], -1)
-                points -= points_mean.expand_as(points)
-                points = points.reshape(-1,3,self.vertex_num)
+                points, euler_angle, scale, trans = self.solve_points(img)
 
                 # solve landmarks
                 lands_2d = CalculateLandmark2D(euler_angle, scale, trans, points, self.landmark_index, self.landmark_num)
@@ -364,3 +245,68 @@ class CariFace():
         state2 = {'net':self.model2.state_dict(), 'optimizer2':self.optimizer2.state_dict(), 'optimizer3':self.optimizer3.state_dict(), 'epoch':epoch}
         torch.save(state1, save_path+"resnet34_adam_"+str(epoch)+".pth")
         torch.save(state2, save_path+"mynet_adam_"+str(epoch)+".pth")
+
+    def solve_points(self, img):
+        output = self.model1(img)
+        alpha = output[:, 0:94]
+        scale = output[:, 94]
+        euler_angle = output[:, 95:98]
+        trans = output[:, 98:100]
+
+        # solve logR_S and T
+        delta = self.model2(alpha)
+        logR_S = delta + self.logR_S_mean
+        logR_S = logR_S.reshape(-1, 9)
+        rparas = logR_S[:, 0:3]
+        sparas = logR_S[:, 3:]
+        angles = rparas.norm(2, 1)
+        indices = angles.nonzero()
+        tRs = torch.zeros_like(logR_S)
+        tRs[:, 0::4] = 1.0
+        if indices.numel() > 0 and indices.numel() < angles.numel():
+            indices = indices[:, 0]
+            crparas = rparas[indices] / angles[indices].reshape(-1, 1)
+            temp = (1 - torch.cos(angles[indices]).reshape(-1, 1))
+            tempS = torch.sin(angles[indices]).reshape(-1, 1)
+            tRs[indices, 0::4] = torch.cos(angles[indices]).reshape(-1, 1) + temp * crparas * crparas
+            tRs[indices, 1] = temp.view(-1) * crparas[:, 0] * crparas[:, 1] - tempS.view(-1) * crparas[:, 2]
+            tRs[indices, 2] = temp.view(-1) * crparas[:, 0] * crparas[:, 2] + tempS.view(-1) * crparas[:, 1]
+            tRs[indices, 3] = temp.view(-1) * crparas[:, 0] * crparas[:, 1] + tempS.view(-1) * crparas[:, 2]
+            tRs[indices, 5] = temp.view(-1) * crparas[:, 1] * crparas[:, 2] - tempS.view(-1) * crparas[:, 0]
+            tRs[indices, 6] = temp.view(-1) * crparas[:, 0] * crparas[:, 2] - tempS.view(-1) * crparas[:, 1]
+            tRs[indices, 7] = temp.view(-1) * crparas[:, 1] * crparas[:, 2] + tempS.view(-1) * crparas[:, 0]
+        elif indices.numel() == angles.numel():
+            rparas = rparas / angles.reshape(-1, 1)
+            temp = (1 - torch.cos(angles).reshape(-1, 1))
+            tempS = torch.sin(angles).reshape(-1, 1)
+            tRs[:, 0::4] = torch.cos(angles).reshape(-1, 1) + temp * rparas * rparas
+            tRs[:, 1] = temp.view(-1) * rparas[:, 0] * rparas[:, 1] - tempS.view(-1) * rparas[:, 2]
+            tRs[:, 2] = temp.view(-1) * rparas[:, 0] * rparas[:, 2] + tempS.view(-1) * rparas[:, 1]
+            tRs[:, 3] = temp.view(-1) * rparas[:, 0] * rparas[:, 1] + tempS.view(-1) * rparas[:, 2]
+            tRs[:, 5] = temp.view(-1) * rparas[:, 1] * rparas[:, 2] - tempS.view(-1) * rparas[:, 0]
+            tRs[:, 6] = temp.view(-1) * rparas[:, 0] * rparas[:, 2] - tempS.view(-1) * rparas[:, 1]
+            tRs[:, 7] = temp.view(-1) * rparas[:, 1] * rparas[:, 2] + tempS.view(-1) * rparas[:, 0]
+        tSs = torch.zeros_like(logR_S)
+        tSs[:, 0:3] = sparas[:, 0:3]
+        tSs[:, 3] = sparas[:, 1]
+        tSs[:, 4:6] = sparas[:, 3:5]
+        tSs[:, 6] = sparas[:, 2]
+        tSs[:, 7] = sparas[:, 4]
+        tSs[:, 8] = sparas[:, 5]
+        Ts = torch.bmm(tRs.reshape(-1, 3, 3), tSs.reshape(-1, 3, 3)).reshape(-1, self.vertex_num, 9)
+
+        # solve points
+        Tijs = Ts.index_select(1, self.one_ring_center_ids) + Ts.index_select(1, self.one_ring_ids)
+        pijs = self.P_.index_select(0, self.one_ring_center_ids) - self.P_.index_select(0, self.one_ring_ids)
+        temp = torch.zeros((Tijs.size()[0], 3, Tijs.size()[1]), device=Ts.device)
+        temp[:, 0, :] = torch.sum(Tijs[:, :, 0:3] * (pijs * self.one_ring_lbweights.reshape(-1, 1)), 2)
+        temp[:, 1, :] = torch.sum(Tijs[:, :, 3:6] * (pijs * self.one_ring_lbweights.reshape(-1, 1)), 2)
+        temp[:, 2, :] = torch.sum(Tijs[:, :, 6:9] * (pijs * self.one_ring_lbweights.reshape(-1, 1)), 2)
+        temp = temp.reshape(-1, self.one_ring_ids.numel()).t().clone()
+        RHS = torch.spmm(self.connect_, temp)
+        points = (torch.matmul(self.A_pinv, RHS)).t()
+        points_mean = torch.mean(points, 1).reshape(points.shape[0], -1)
+        points -= points_mean.expand_as(points)
+        points = points.reshape(-1, 3, self.vertex_num)
+
+        return points, euler_angle, scale, trans

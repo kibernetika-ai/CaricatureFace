@@ -1,1 +1,1 @@
-This folder is used to contain two pretrained models for our method.
+This folder contains two pretrained models for our method.
