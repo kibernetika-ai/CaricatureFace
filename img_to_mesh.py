@@ -40,4 +40,4 @@ if __name__ == '__main__':
     vertex = points.squeeze().numpy()
     for i in range(6144):
         mesh.points()[i] = vertex[:, i]
-    om.write_mesh(os.path.splitext(os.path.basename(args.image))[0]+".obj", mesh)
+    om.write_mesh(os.path.splitext(args.image)[0]+".obj", mesh)
