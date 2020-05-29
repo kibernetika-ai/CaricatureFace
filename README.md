@@ -3,6 +3,19 @@ This repository includes source code, pretrained model and a testset of paper "L
 
 ![examples](fig/examples.png)
 
+## Landmarks vertex indexes
+
+68 landmark indexes of 6144 vertexes:
+
+```shell script
+1316, 822, 3920, 3842, 3879, 1083,  504, 1080, 3611, 2643, 1929, 2646,
+5334, 5363, 5292, 2247, 2741,  702,  711,  853,  724,  856, 4875, 4848,
+2150, 2374, 2386, 2394, 3901, 2914, 2890, 3549,  355, 2931, 1780, 5686,
+137,  619, 4340, 4401,  154,  150, 4744, 2340, 5072, 2335, 2344, 4814,
+3196, 3237, 3254, 6072, 6142, 6124, 6049, 6045, 1617, 3190,  192, 3267,
+256, 1459, 3066, 3065, 2953, 6014, 3069, 3234
+```
+
 ## Update Logs:
 ### May 9, 2020
 * Add a toy example for conversion between 3D face and vertices.
